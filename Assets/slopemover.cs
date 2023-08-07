@@ -168,6 +168,8 @@ public class slopemover : MonoBehaviour
 
     void FixedUpdate()
     {
+        if (player.GetButtonDown("Focus"))
+            Cursor.lockState = CursorLockMode.Locked;
         Time.timeScale = gameSpeed;
 
         characterMove = Vector3.zero;
