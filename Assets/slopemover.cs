@@ -9,9 +9,9 @@ public class slopemover : MonoBehaviour
 {
     public int playerId = 0;
 
-    public float gameSpeed = 1f;
     public float moveSpeed = 1f;
     public float turnSpeed = 0.5f;
+    public float gravityTime = 0.5f;
     public float cameraSpeed = 2f;
     public float cameraAccelerationSpeed = 0.1f;
     public float movementDeadzone = 0.1f;
@@ -21,18 +21,21 @@ public class slopemover : MonoBehaviour
     Rigidbody playerBody;
     Vector3 characterMove = Vector3.zero;
     
+    EasingFloat jumpAcc = new EasingFloat();
+    bool isTerminalVelocity = false;
+    EasingFloat fallAcc = new EasingFloat();
     Vector3 groundNormal = Vector3.up;
     Vector3 lastPos = Vector3.zero;
-    public Vector3 playerGravity = Vector3.down;
+    public Vector3 gravityDirection = Vector3.down;
+    public float gravityStrength = 5;
     
     Transform modelTransform;
     Quaternion startRotation = Quaternion.identity;
-    float rotationTime = 0f;
-    float rotationStartTime = 0f;
+    EasingFloat rotationAcc = new EasingFloat();
 
     Transform cameraTarget;
     Vector2 cameraPos = Vector2.zero;
-    Vector2 cameraAcc = Vector2.zero;
+    EasingTwoFloats cameraAcc = new EasingTwoFloats();
     bool isCameraMovingX = false;
     bool isCameraMovingY = false;
     Vector2 lastSigns = Vector2.zero;
@@ -50,7 +53,7 @@ public class slopemover : MonoBehaviour
     {
     }
 
-    void RotateCamera()
+    void HandleCamera()
     {
         Vector2 stickValue = player.GetAxis2D("CamX", "CamY");
 
@@ -58,9 +61,9 @@ public class slopemover : MonoBehaviour
         if (Mathf.Abs(stickValue.x) > 0.2f)
         {
             if (!isCameraMovingX)
-                cameraAcc.x = 0;
+                cameraAcc.x.Start(cameraAccelerationSpeed, 0);
 
-            cameraAcc.x = Mathf.Min(cameraAccelerationSpeed, cameraAcc.x + Time.fixedDeltaTime);
+            cameraAcc.x.Update(Time.fixedDeltaTime);
             lastSigns.x = Mathf.Sign(stickValue.x);
 
             isCameraMovingX = true;
@@ -69,9 +72,9 @@ public class slopemover : MonoBehaviour
         else
         {
             if (isCameraMovingX)
-                cameraAcc.x = cameraAccelerationSpeed;
+                cameraAcc.x.Start(0, cameraAccelerationSpeed);
 
-            cameraAcc.x = Mathf.Max(0, cameraAcc.x - Time.fixedDeltaTime);
+            cameraAcc.x.Update(Time.fixedDeltaTime);
             stickValue.x = 0;
 
             isCameraMovingX = false;
@@ -81,9 +84,9 @@ public class slopemover : MonoBehaviour
         if (Mathf.Abs(stickValue.y) > 0.4f)
         {
             if (!isCameraMovingY)
-                cameraAcc.y = 0;
+                cameraAcc.y.Start(cameraAccelerationSpeed, 0);
 
-            cameraAcc.y = Mathf.Min(cameraAccelerationSpeed, cameraAcc.y + Time.fixedDeltaTime);
+            cameraAcc.y.Update(Time.fixedDeltaTime);
             lastSigns.y = Mathf.Sign(stickValue.y);
 
             isCameraMovingY = true;
@@ -92,9 +95,9 @@ public class slopemover : MonoBehaviour
         else
         {
             if (isCameraMovingY)
-                cameraAcc.y = cameraAccelerationSpeed;
+                cameraAcc.y.Start(0, cameraAccelerationSpeed);
             
-            cameraAcc.y = Mathf.Max(0, cameraAcc.y - Time.fixedDeltaTime);
+            cameraAcc.y.Update(Time.fixedDeltaTime);
             stickValue.y = 0;
 
             isCameraMovingY = false;
@@ -115,24 +118,41 @@ public class slopemover : MonoBehaviour
         cameraTarget.rotation = Quaternion.Euler(cameraPos.y, cameraPos.x, 0);
     }
 
-    void MoveCharacter()
+    void HandleMovement()
     {
-        if (isGrounded = CheckFloor(out RaycastHit hit) || (wasGrounded && CheckSlopedFloor(out hit)))
+        if ((isGrounded = CheckFloor(out RaycastHit hit, out bool onSteep)) || (wasGrounded && CheckSlopedFloor(out hit, out onSteep)))
         {
             groundNormal = hit.normal;
             //!!Add code here for platform position change!!
             transform.position = hit.point + (Vector3.up * transform.localScale.y);
+            if (onSteep) {
+                characterMove += Vector3.ProjectOnPlane(
+                    gravityDirection,
+                    groundNormal
+                ) * (gravityStrength*0.5f);
+            }
+            isTerminalVelocity = false;
+            fallAcc.Current = gravityTime;
         } else
         {
-            groundNormal = Vector3.up;
-            characterMove += playerGravity;
+            groundNormal = -gravityDirection;
+            if ((wasGrounded || jumpAcc.Complete) && (!isTerminalVelocity && fallAcc.Complete)) {
+                //Startup for accel
+                Debug.Log("Starting to fall");
+                fallAcc.Start(gravityTime,0);
+            } else {
+                fallAcc.Update(Time.fixedDeltaTime);
+                characterMove += gravityDirection * fallAcc * gravityStrength;
+                if (!isTerminalVelocity && fallAcc.Complete)
+                    isTerminalVelocity = true;
+            }
         }
 
         Vector3 stickValue = Quaternion.Euler(0, cameraPos.x, 0) * new Vector3(player.GetAxis("MoveX"), 0, player.GetAxis("MoveY"));
 
-        if (rotationTime > 0) {
-            rotationTime -= Time.fixedDeltaTime;
-            modelTransform.localRotation = Quaternion.Lerp(Quaternion.identity, startRotation, rotationTime/rotationStartTime);
+        if (!rotationAcc.Complete) {
+            rotationAcc.Update(Time.fixedDeltaTime);
+            modelTransform.localRotation = Quaternion.Lerp(Quaternion.identity, startRotation, rotationAcc/rotationAcc.StartTime);
         }
 
         //Only move and calc rotation if magnitude is above deadzone
@@ -144,8 +164,7 @@ public class slopemover : MonoBehaviour
             float angleDiff = 0;
             if ((angleDiff = Quaternion.Angle(oldRotation * modelTransform.localRotation, transform.rotation)) > 0)
             {
-                rotationTime = (angleDiff/180) * turnSpeed;
-                rotationStartTime = rotationTime;
+                rotationAcc.Start(0,(angleDiff/180) * turnSpeed);
                 startRotation = oldRotation * Quaternion.Inverse(transform.rotation) * modelTransform.localRotation;
                 modelTransform.localRotation = startRotation;
             }
@@ -157,25 +176,53 @@ public class slopemover : MonoBehaviour
         }
     }
 
-    bool CheckFloor(out RaycastHit hit)
+    void HandleJump()
     {
-        return Physics.Raycast(transform.position, -transform.up, out hit, transform.localScale.y+0.1f) && Vector3.Angle(Vector3.up, hit.normal) <= 45;
+        if (isGrounded && player.GetButtonDown("Jump"))
+        {
+            isTerminalVelocity = false;
+            jumpAcc.Start(0,gravityTime);
+            fallAcc.Current = gravityTime;
+            groundNormal = -gravityDirection;
+        } else {
+            if (!jumpAcc.Complete)
+            {
+                if (player.GetButton("Jump"))
+                {
+                    jumpAcc.Update(Time.fixedDeltaTime);
+                    characterMove -= gravityDirection * jumpAcc * gravityStrength;
+                } else
+                {
+                    jumpAcc.Start(1,1);
+                }
+            }
+        }
     }
-    bool CheckSlopedFloor(out RaycastHit hit)
+    bool CheckFloor(out RaycastHit hit, out bool onSteep)
     {
-        return Physics.Raycast(transform.position, -transform.up, out hit, Mathf.Infinity) && Vector3.Angle(Vector3.up, hit.normal) <= 45 && Vector3.Distance(hit.point, lastPos) < Vector3.Distance(transform.position, lastPos);
+        bool onFloor = Physics.Raycast(transform.position, -transform.up, out hit, transform.localScale.y+0.1f); //Test for floor beneath us
+        float floorAngle = Vector3.Angle(Vector3.up, hit.normal);
+        onSteep = (floorAngle > 45); //Check if sloped floor is too steep
+        return onFloor && floorAngle < 67;
+    }
+    bool CheckSlopedFloor(out RaycastHit hit, out bool onSteep)
+    {
+        bool onFloor = Physics.Raycast(transform.position, -transform.up, out hit, Mathf.Infinity); //Test for sloped floor after edge
+        float floorAngle = Vector3.Angle(Vector3.up, hit.normal);
+        onSteep = (floorAngle > 45); //Check if sloped floor is too steep
+        return onFloor && floorAngle < 67 && Vector3.Distance(hit.point, lastPos) <= Vector3.Distance(transform.position, lastPos); //Check if hit point is too far to be considered smooth movement
     }
 
     void FixedUpdate()
     {
         if (player.GetButtonDown("Focus"))
             Cursor.lockState = CursorLockMode.Locked;
-        Time.timeScale = gameSpeed;
 
         characterMove = Vector3.zero;
 
-        RotateCamera();
-        MoveCharacter();
+        HandleCamera();
+        HandleMovement();
+        HandleJump();
 
         lastPos = transform.position;
         wasGrounded = isGrounded;
