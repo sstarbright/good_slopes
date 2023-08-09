@@ -187,14 +187,8 @@ public class slopemover : MonoBehaviour
         } else {
             if (!jumpAcc.Complete)
             {
-                if (player.GetButton("Jump"))
-                {
-                    jumpAcc.Update(Time.fixedDeltaTime);
-                    characterMove -= gravityDirection * jumpAcc * gravityStrength;
-                } else
-                {
-                    jumpAcc.Start(1,1);
-                }
+                jumpAcc.Update(Time.fixedDeltaTime);
+                characterMove -= gravityDirection * jumpAcc * gravityStrength;
             }
         }
     }
